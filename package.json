@@ -1,0 +1,64 @@
+{
+  "name": "agent-cursor",
+  "version": "0.1.0",
+  "description": "Shows an agent avatar moving across the screen while Playwright clicks, types and selects options. It doesn't automate anything, it only makes it visible.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run typecheck && npm run build",
+    "test": "playwright test",
+    "predemo": "npm run build",
+    "demo": "node examples/demo.mjs",
+    "predemo:avatars": "npm run build",
+    "demo:avatars": "node examples/demo-all-avatars.mjs",
+    "embed-avatars": "node scripts/embed-avatars.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "playwright",
+    "automation",
+    "visualizer",
+    "agent",
+    "overlay",
+    "cursor"
+  ],
+  "author": "edudevcol",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edudevcol/agent-cursor.git"
+  },
+  "homepage": "https://github.com/edudevcol/agent-cursor#readme",
+  "bugs": {
+    "url": "https://github.com/edudevcol/agent-cursor/issues"
+  },
+  "peerDependencies": {
+    "playwright-core": ">=1.40.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "playwright": "^1.48.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>agent-cursor demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 60px auto; }
+    label { display: block; margin-top: 16px; font-weight: 600; }
+    input, select { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+    button { margin-top: 24px; padding: 10px 20px; }
+  </style>
+</head>
+<body>
+  <h1>Sample form</h1>
+  <form id="demo-form">
+    <label for="name">Name</label>
+    <input id="name" type="text" placeholder="Your name" />
+
+    <label for="email">Email</label>
+    <input id="email" type="email" placeholder="you@example.com" />
+
+    <label for="password">Password</label>
+    <input id="password" type="password" placeholder="••••••" />
+
+    <label for="country">Country</label>
+    <select id="country">
+      <option value="">Choose a country</option>
+      <option value="co">Colombia</option>
+      <option value="mx">Mexico</option>
+      <option value="ar">Argentina</option>
+    </select>
+
+    <label>
+      <input id="terms" type="checkbox" style="width: auto; display: inline-block;" />
+      I accept the terms
+    </label>
+
+    <button id="submit" type="button">Submit</button>
+  </form>
+</body>
+</html>
