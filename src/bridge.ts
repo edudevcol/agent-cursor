@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { extname } from "node:path";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 import {
   AVATAR_THEMES,
   DEFAULT_THEME,
@@ -9,7 +9,7 @@ import {
   type AvatarTheme,
 } from "./overlay/avatars.js";
 import { buildStyles } from "./overlay/styles.js";
-import { installOverlayInBrowser, type BrowserAgentConfig } from "./overlay/overlay.js";
+import { installOverlayInBrowser, type BrowserAction, type BrowserAgentConfig } from "./overlay/overlay.js";
 import { DEFAULT_AVATAR, type AvatarOption, type ResolvedAgentOptions } from "./options.js";
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5 MB (the browser scales it down to the badge)
@@ -116,17 +116,15 @@ function escapeAttr(text: string): string {
 }
 
 export interface AgentBridge {
-  moveTo(x: number, y: number, durationMs?: number, side?: "right" | "left"): Promise<void>;
-  clickEffect(x?: number, y?: number): Promise<void>;
-  labelEffect(text: string, durationMs?: number): Promise<void>;
-  typeEffect(text: string, durationMs: number): Promise<void>;
-  highlightRect(rect: { x: number; y: number; width: number; height: number } | null): Promise<void>;
-  startWorking(): Promise<void>;
-  stopWorking(): Promise<void>;
+  /** Plays the action on the element in a single evaluate (one trace entry per action). */
+  animate(locator: Locator, action: BrowserAction): Promise<void>;
   show(): Promise<void>;
   hide(): Promise<void>;
   dispose(): Promise<void>;
 }
+
+/** How long to wait for the element to exist before giving up on the animation. */
+const LOCATE_TIMEOUT_MS = 2000;
 
 let idCounter = 0;
 
@@ -150,6 +148,7 @@ export async function installAgentBridge(
     name: opts.name,
     css,
     avatarHtml,
+    size: opts.size,
     moveDuration: Math.max(opts.moveDuration / Math.max(opts.speed, 0.01), 30),
     showLabels: opts.showLabels,
     highlight: opts.highlight,
@@ -189,14 +188,25 @@ export async function installAgentBridge(
     );
   };
 
+  // Runs in the element's own frame, where addInitScript already installed an overlay —
+  // so frames and framesets work without mapping coordinates between documents.
+  const animate = async (locator: Locator, action: BrowserAction): Promise<void> => {
+    try {
+      await locator.evaluate(
+        (el, { agentId, a }) => {
+          const api = (window as any).__agentVisualizer?.[agentId];
+          return api?.animate(el, a);
+        },
+        { agentId: id, a: action },
+        { timeout: LOCATE_TIMEOUT_MS }
+      );
+    } catch (err) {
+      log(opts.debug, "animate failed (ignored, does not affect automation):", err);
+    }
+  };
+
   return {
-    moveTo: (x, y, durationMs, side) => call("moveTo", x, y, durationMs, side),
-    clickEffect: (x, y) => call("clickEffect", x, y),
-    labelEffect: (text, durationMs) => call("labelEffect", text, durationMs),
-    typeEffect: (text, durationMs) => call("typeEffect", text, durationMs),
-    highlightRect: (rect) => call("highlightRect", rect),
-    startWorking: () => call("startWorking"),
-    stopWorking: () => call("stopWorking"),
+    animate,
     show: () => call("show"),
     hide: () => call("hide"),
     dispose: () => call("dispose"),

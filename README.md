@@ -105,6 +105,17 @@ AGENT_VISUALIZER=off node my-script.js
 
 `type="password"` fields never show the real text in the bubble.
 
+## Frames and framesets
+
+The avatar is drawn inside the frame that holds the element, so pages built with `<iframe>`
+or `<frameset>` work without any extra setup. When the next action happens in another frame,
+the avatar hides in the previous one.
+
+## Traces
+
+Each animated action adds a single Playwright call, so traces (`trace: 'on'` or
+`'retain-on-failure'`) stay small and closing the context stays fast.
+
 ## Known limitations
 
 - In `headless: true` mode it's not visible live, but it does show up in Playwright

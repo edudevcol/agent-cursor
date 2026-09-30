@@ -1,5 +1,6 @@
 import type { Page, Frame, Locator } from "playwright-core";
 import type { AgentBridge } from "./bridge.js";
+import type { BrowserAction } from "./overlay/overlay.js";
 import type { ResolvedAgentOptions } from "./options.js";
 
 interface AgentRuntime {
@@ -31,26 +32,8 @@ const ANIMATED_METHODS = [
 type AnimatedMethod = (typeof ANIMATED_METHODS)[number];
 type PatchKind = "frame" | "locator";
 
-const BOUNDING_BOX_TIMEOUT_MS = 2000;
-
 function debugLog(debug: boolean, ...args: unknown[]) {
   if (debug) console.debug("[agent-cursor]", ...args);
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(undefined), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(undefined);
-      }
-    );
-  });
 }
 
 /** Splits the selector (Frame only) off the rest of the arguments, and gives a uniform Locator. */
@@ -66,15 +49,6 @@ function getLocatorAndRest(
   return { locator: target as Locator, rest: args };
 }
 
-async function isPasswordField(locator: Locator): Promise<boolean> {
-  try {
-    const type = await locator.evaluate((el) => (el as HTMLInputElement).type).catch(() => "");
-    return type === "password";
-  } catch {
-    return false;
-  }
-}
-
 function stringifySelectValues(value: unknown): string {
   if (Array.isArray(value)) return value.map((v) => stringifySelectValues(v)).join(", ");
   if (value && typeof value === "object" && "label" in (value as any)) return String((value as any).label);
@@ -82,18 +56,19 @@ function stringifySelectValues(value: unknown): string {
   return String(value);
 }
 
-/** Computes the bubble label and, if applicable, the text to "type" letter by letter. */
-async function describeAction(
-  method: AnimatedMethod,
-  locator: Locator,
-  rest: unknown[]
-): Promise<{ label?: string; typedText?: string }> {
+/** Builds what the page has to play; password masking happens in the page. */
+function describeAction(method: AnimatedMethod, rest: unknown[], speed: number): BrowserAction {
   switch (method) {
+    case "click":
+    case "tap":
+      return { clicks: 1 };
+    case "dblclick":
+      return { clicks: 2 };
     case "fill":
     case "type": {
-      const raw = String(rest[0] ?? "");
-      const masked = (await isPasswordField(locator)) ? "•".repeat(raw.length || 6) : raw;
-      return { typedText: masked };
+      const text = String(rest[0] ?? "");
+      const typeDurationMs = Math.min(Math.max(text.length * 40, 200), 1500) / Math.max(speed, 0.01);
+      return { text, typeDurationMs };
     }
     case "press":
       return { label: `Key: ${String(rest[0] ?? "")}` };
@@ -119,55 +94,9 @@ async function animateAction(
 ): Promise<void> {
   const { bridge, opts } = runtime;
   const { locator, rest } = getLocatorAndRest(target, kind, args);
-
-  await withTimeout(locator.scrollIntoViewIfNeeded(), BOUNDING_BOX_TIMEOUT_MS);
-  const box = await withTimeout(locator.boundingBox(), BOUNDING_BOX_TIMEOUT_MS);
-  if (!box) {
-    // Couldn't locate the element in time: skip the animation, the real action still runs.
-    return;
-  }
-
-  const centerX = box.x + box.width / 2;
-  const centerY = box.y + box.height / 2;
-
-  // The agent sits BESIDE the element (never on top of it), so it never covers
-  // what's being typed or selected. The right side is preferred; if it doesn't
-  // fit in the viewport, it falls back to the left. The highlight still marks
-  // the real element.
-  const gap = 14;
-  let page: Page | undefined;
-  try {
-    page = locator.page();
-  } catch {
-    // no access to page(), fall back to a reasonable default viewport width
-  }
-  const viewportWidth = page?.viewportSize()?.width ?? 1280;
-  const half = opts.size / 2;
-  const rightAnchorX = box.x + box.width + gap + half;
-  const fitsRight = rightAnchorX + half <= viewportWidth;
-  const anchorX = fitsRight ? rightAnchorX : Math.max(box.x - gap - half, half);
-  const anchorY = centerY;
-
-  await bridge.highlightRect({ x: box.x, y: box.y, width: box.width, height: box.height });
-  await bridge.startWorking();
-  await bridge.moveTo(anchorX, anchorY, undefined, fitsRight ? "right" : "left");
-
-  const { label, typedText } = await describeAction(method, locator, rest);
-
-  if (method === "click" || method === "tap") {
-    await bridge.clickEffect(centerX, centerY);
-  } else if (method === "dblclick") {
-    await bridge.clickEffect(centerX, centerY);
-    await bridge.clickEffect(centerX, centerY);
-  } else if (typedText !== undefined) {
-    const duration = Math.min(Math.max(typedText.length * 40, 200), 1500) / Math.max(opts.speed, 0.01);
-    await bridge.typeEffect(typedText, duration);
-  } else if (label) {
-    await bridge.labelEffect(label);
-  }
-
-  await bridge.stopWorking();
-  await bridge.highlightRect(null);
+  // Single Playwright call per action: every extra call is recorded in traces with a DOM
+  // snapshot, and on heavy pages flushing hundreds of them stalls the context teardown.
+  await bridge.animate(locator, describeAction(method, rest, opts.speed));
 }
 
 function patchTarget(prototype: any, kind: PatchKind) {
@@ -188,16 +117,19 @@ function patchTarget(prototype: any, kind: PatchKind) {
         return original.apply(this, args);
       }
 
+      // The guard stays on through the real action: Locator methods delegate to their Frame
+      // counterparts, which would otherwise animate the same action a second time.
       insideAnimatedCall.set(page, true);
       try {
-        await animateAction(runtime, kind, this, method as AnimatedMethod, args);
-      } catch (err) {
-        debugLog(runtime.opts.debug, `animation for "${method}" failed, ignored:`, err);
+        try {
+          await animateAction(runtime, kind, this, method as AnimatedMethod, args);
+        } catch (err) {
+          debugLog(runtime.opts.debug, `animation for "${method}" failed, ignored:`, err);
+        }
+        return await original.apply(this, args);
       } finally {
         insideAnimatedCall.set(page, false);
       }
-
-      return original.apply(this, args);
     };
   }
 }

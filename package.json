@@ -1,6 +1,6 @@
 {
   "name": "agent-cursor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shows an agent avatar moving across the screen while Playwright clicks, types and selects options. It doesn't automate anything, it only makes it visible.",
   "type": "module",
   "main": "./dist/index.cjs",

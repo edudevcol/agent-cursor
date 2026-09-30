@@ -9,10 +9,22 @@ export interface BrowserAgentConfig {
   name: string;
   css: string;
   avatarHtml: string;
+  size: number;
   moveDuration: number;
   showLabels: boolean;
   highlight: boolean;
   debug: boolean;
+}
+
+/** One animated action, computed in Node and played entirely inside the page. */
+export interface BrowserAction {
+  /** Ripples to show (click/tap = 1, dblclick = 2). */
+  clicks?: number;
+  /** Text to "type" letter by letter; masked in the page if the field is a password. */
+  text?: string;
+  typeDurationMs?: number;
+  /** Bubble text for press/select/check. */
+  label?: string;
 }
 
 /**
@@ -193,30 +205,104 @@ export function installOverlayInBrowser(config: BrowserAgentConfig): void {
     }
   }
 
-  function show(): void {
-    avatar.classList.add("agent-visible");
-  }
-  function hide(): void {
+  function hideLocal(): void {
     avatar.classList.remove("agent-visible");
     highlightBox.classList.remove("agent-visible");
     bubble.classList.remove("agent-visible");
   }
-  function dispose(): void {
-    hide();
+  function disposeLocal(): void {
+    hideLocal();
     host.remove();
+    window.removeEventListener("message", onMessage);
     delete w.__agentVisualizer[config.id];
   }
 
+  // Every frame runs its own copy of this overlay, so the avatar is drawn in the frame that
+  // holds the element. Frames coordinate through postMessage (works cross-origin, and it's
+  // not a Playwright call, so it never shows up in traces): the top window relays each
+  // message down the frame tree.
+  const MSG_KEY = "__agentCursor";
+  const instanceToken = Math.random().toString(36).slice(2);
+
+  function relayToChildren(msg: unknown): void {
+    for (let i = 0; i < window.frames.length; i++) {
+      try {
+        window.frames[i].postMessage(msg, "*");
+      } catch {
+        // detached frame
+      }
+    }
+  }
+
+  function onMessage(ev: MessageEvent): void {
+    const data = ev.data;
+    if (!data || data[MSG_KEY] !== config.id) return;
+    relayToChildren(data);
+    if (data.type === "hide-others" && data.from !== instanceToken) hideLocal();
+    else if (data.type === "hide-all") hideLocal();
+    else if (data.type === "dispose-all") disposeLocal();
+  }
+  window.addEventListener("message", onMessage);
+
+  function hideInOtherFrames(): void {
+    try {
+      window.top!.postMessage({ [MSG_KEY]: config.id, type: "hide-others", from: instanceToken }, "*");
+    } catch {
+      // no access to top
+    }
+  }
+
+  /** Plays a whole action (scroll, highlight, move, effect) in one call from Node. */
+  async function animate(el: Element, action: BrowserAction): Promise<void> {
+    try {
+      hideInOtherFrames();
+      let r = el.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) {
+        el.scrollIntoView({ block: "center", inline: "nearest" });
+        r = el.getBoundingClientRect();
+      }
+      if (!r.width && !r.height) return;
+
+      // The agent sits BESIDE the element (never on top of it): right side preferred,
+      // left if it doesn't fit.
+      const gap = 14;
+      const half = config.size / 2;
+      const rightX = r.right + gap + half;
+      const fitsRight = rightX + half <= window.innerWidth;
+      const x = fitsRight ? rightX : Math.max(r.left - gap - half, half);
+      const y = r.top + r.height / 2;
+
+      highlightRect({ x: r.left, y: r.top, width: r.width, height: r.height });
+      startWorking();
+      await moveTo(x, y, undefined, fitsRight ? "right" : "left");
+
+      if (action.clicks) {
+        for (let i = 0; i < action.clicks; i++) clickEffect(r.left + r.width / 2, y);
+      } else if (action.text !== undefined) {
+        const isPassword = (el as HTMLInputElement).type === "password";
+        const text = isPassword ? "•".repeat(action.text.length || 6) : action.text;
+        await typeEffect(text, action.typeDurationMs ?? 500);
+      } else if (action.label) {
+        labelEffect(action.label);
+      }
+    } catch (err) {
+      log("animate failed", err);
+    } finally {
+      stopWorking();
+      highlightRect(null);
+    }
+  }
+
   w.__agentVisualizer[config.id] = {
-    moveTo,
-    clickEffect,
-    labelEffect,
-    typeEffect,
-    highlightRect,
-    startWorking,
-    stopWorking,
-    show,
-    hide,
-    dispose,
+    animate,
+    show: () => avatar.classList.add("agent-visible"),
+    hide: () => {
+      hideLocal();
+      relayToChildren({ [MSG_KEY]: config.id, type: "hide-all" });
+    },
+    dispose: () => {
+      relayToChildren({ [MSG_KEY]: config.id, type: "dispose-all" });
+      disposeLocal();
+    },
   };
 }

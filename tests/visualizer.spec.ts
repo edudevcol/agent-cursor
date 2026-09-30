@@ -84,6 +84,80 @@ test.describe("agent-cursor", () => {
     expect(alt).toBe("businessperson avatar");
   });
 
+  test("inside an iframe the avatar is drawn in that frame", async ({ page }) => {
+    await showAgent(page);
+    await page.setContent(`<iframe srcdoc="<input id='x'>" style="width:400px;height:200px"></iframe>`);
+    const frame = page.frameLocator("iframe");
+    await frame.locator("#x").fill("hola");
+    await expect(frame.locator("#x")).toHaveValue("hola");
+
+    const avatarVisible = await page.frames()[1].evaluate(() => {
+      const host = document.querySelector("[data-agent-cursor-host]");
+      return !!host?.shadowRoot?.querySelector(".agent-avatar.agent-visible");
+    });
+    expect(avatarVisible).toBe(true);
+  });
+
+  test("in a frameset the avatar moves to the frame of each element", async ({ page }) => {
+    await page.route("http://agent.test/**", (route) => {
+      const url = route.request().url();
+      const body = url.endsWith("/")
+        ? `<frameset cols="50%,50%"><frame name="menu" src="/menu"><frame name="main" src="/main"></frameset>`
+        : url.endsWith("/menu")
+          ? `<body><a id="go" href="#">Go</a></body>`
+          : `<body><input id="x"></body>`;
+      return route.fulfill({ contentType: "text/html", body });
+    });
+    await showAgent(page);
+    await page.goto("http://agent.test/");
+
+    const avatarVisibleIn = (name: string) =>
+      page.frame(name)!.evaluate(() => {
+        const host = document.querySelector("[data-agent-cursor-host]");
+        return !!host?.shadowRoot?.querySelector(".agent-avatar.agent-visible");
+      });
+
+    await page.frame("menu")!.locator("#go").click();
+    expect(await avatarVisibleIn("menu")).toBe(true);
+
+    await page.frame("main")!.locator("#x").fill("hola");
+    await expect(page.frame("main")!.locator("#x")).toHaveValue("hola");
+    expect(await avatarVisibleIn("main")).toBe(true);
+    await expect.poll(() => avatarVisibleIn("menu"), { message: "the previous frame hides its avatar" }).toBe(false);
+  });
+
+  test("with tracing on, closing the context stays fast", async ({ page, context }, testInfo) => {
+    await context.tracing.start({ screenshots: true, snapshots: true });
+    await showAgent(page, { speed: 10 });
+    await page.goto(demoPageUrl);
+    for (let i = 0; i < 20; i++) {
+      await page.locator("#name").fill(`Intento ${i}`);
+      await page.locator("#terms").check();
+      await page.locator("#terms").uncheck();
+    }
+    const start = Date.now();
+    await context.tracing.stop({ path: testInfo.outputPath("trace.zip") });
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  test("each action adds a single extra Playwright call", async ({ page }) => {
+    await showAgent(page);
+    await page.goto(demoPageUrl);
+    const calls: string[] = [];
+    const original = page.locator("body").evaluate;
+    const proto = Object.getPrototypeOf(page.locator("body"));
+    proto.evaluate = function (...args: unknown[]) {
+      calls.push("evaluate");
+      return original.apply(this, args as any);
+    };
+    try {
+      await page.locator("#name").fill("Carlos");
+    } finally {
+      proto.evaluate = original;
+    }
+    expect(calls).toHaveLength(1);
+  });
+
   test("a page without showAgent is unaffected", async ({ page }) => {
     await page.goto(demoPageUrl);
     await page.locator("#name").fill("No agent");
